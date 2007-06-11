@@ -6,7 +6,6 @@
 
 if has("python")
 
-function! AutoTag()
 python << EEOOFF
 import os
 import string
@@ -16,10 +15,12 @@ import sys
 import vim
 
 class AutoTag:
-   def __init__(self, verbose=False):
+   def __init__(self, excludesuffix="", verbose=False):
       self.tags = {}
+      self.excludesuffix = [ "." + s for s in excludesuffix.split(".") ]
       self.verbose = verbose
       self.sep_used_by_ctags = '/'
+      self.cwd = os.getcwd()
 
    def findTagFile(self, source):
       ( drive, file ) = os.path.splitdrive(source)
@@ -28,9 +29,9 @@ class AutoTag:
          tagsFile = os.path.join(drive, file, "tags")
         #self.diag("does %s exist?", tagsFile)
          if os.path.isfile(tagsFile):
-           #self.diag("%s DOES exist!", tagsFile)
+           #self.diag("Found tags file %s", tagsFile)
             return tagsFile
-         elif not file or file == os.sep:
+         elif not file or file == os.sep or file == "//" or file == "\\\\":
            #self.diag("exhausted search for tag file for %s", source)
             return None
         #self.diag("Nope. :-| %s does NOT exist", tagsFile)
@@ -39,20 +40,33 @@ class AutoTag:
    def addSource(self, source):
       if not source:
          return
+      if os.path.splitext(source)[1] in self.excludesuffix:
+         self.diag("Ignoring excluded file " + source)
+         return
       tagsFile = self.findTagFile(source)
       if tagsFile:
+         #self.diag("if tagsFile:")
          relativeSource = source[len(os.path.dirname(tagsFile)):]
+         #self.diag("relativeSource = source[len(os.path.dirname(tagsFile)):]")
          if relativeSource[0] == os.sep:
+            #self.diag("if relativeSource[0] == os.sep:")
             relativeSource = relativeSource[1:]
+            #self.diag("relativeSource = relativeSource[1:]")
          if os.sep != self.sep_used_by_ctags:
+            #self.diag("if os.sep != self.sep_used_by_ctags:")
             relativeSource = string.replace(relativeSource, os.sep, self.sep_used_by_ctags)
+            #self.diag("relativeSource = string.replace(relativeSource, os.sep, self.sep_used_by_ctags)")
          if self.tags.has_key(tagsFile):
+            #self.diag("if self.tags.has_key(tagsFile):")
             self.tags[tagsFile].append(relativeSource)
+            #self.diag("self.tags[tagsFile].append(relativeSource)")
          else:
+            #self.diag("else:")
             self.tags[tagsFile] = [ relativeSource ]
+            #self.diag("self.tags[tagsFile] = [ relativeSource ]")
 
    def stripTags(self, tagsFile, sources):
-     #self.diag("Removing tags for %s from tags file %s", (sources, tagsFile))
+      self.diag("Removing tags for %s from tags file %s", (sources, tagsFile))
       backup = ".SAFE"
       for line in fileinput.input(files=tagsFile, inplace=True, backup=backup):
          if line[-1:] == '\n':
@@ -77,30 +91,30 @@ class AutoTag:
 
    def rebuildTagFiles(self):
       for tagsFile in self.tags.keys():
-         cwd = os.getcwd()
          tagsDir = os.path.dirname(tagsFile)
-         os.chdir(tagsDir)
          sources = self.tags[tagsFile]
+         os.chdir(tagsDir)
          self.stripTags(tagsFile, sources)
          cmd = "ctags -a"
          for source in sources:
             if os.path.isfile(source):
-               cmd += " \"%s\"" % source
-        #self.diag("%s: %s", (tagsDir, cmd))
+               cmd += " '%s'" % source
+         self.diag("%s: %s", (tagsDir, cmd))
          (ch_in, ch_out) = os.popen2(cmd)
          for line in ch_out:
             pass
-         os.chdir(cwd)
+      os.chdir(self.cwd)
 
    def diag(self, msg, args = None):
       if self.verbose and msg:
          if args:
-            print >>sys.stdout, msg % args
-         else:
-            print >>sys.stdout, msg
+            msg = msg % args
+         vim.command("redraw | echo \"%s\"" % msg.replace('\\', '/'))
+EEOOFF
 
-at = AutoTag(verbose = True)
-import vim
+function! AutoTag()
+python << EEOOFF
+at = AutoTag(vim.eval("g:autotagExcludeSuffixes"), True)
 at.addSource(vim.eval("expand(\"%:p\")"))
 at.rebuildTagFiles()
 EEOOFF
@@ -108,6 +122,9 @@ endfunction
 
 if !exists("g:autotag_autocmd_set")
    let g:autotag_autocmd_set = 1
+   if !exists("g:autotagExcludeSuffixes")
+      let g:autotagExcludeSuffixes="tml.xml"
+   endif
    autocmd BufWritePost,FileWritePost * call AutoTag ()
 endif
 
