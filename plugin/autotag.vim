@@ -15,12 +15,13 @@ import sys
 import vim
 
 class AutoTag:
-   def __init__(self, excludesuffix="", verbose=False):
+   def __init__(self, excludesuffix="", ctags_cmd="ctags", verbose=False):
       self.tags = {}
       self.excludesuffix = [ "." + s for s in excludesuffix.split(".") ]
       self.verbose = verbose
       self.sep_used_by_ctags = '/'
       self.cwd = os.getcwd()
+      self.ctags_cmd = ctags_cmd
 
    def findTagFile(self, source):
       ( drive, file ) = os.path.splitdrive(source)
@@ -95,7 +96,7 @@ class AutoTag:
          sources = self.tags[tagsFile]
          os.chdir(tagsDir)
          self.stripTags(tagsFile, sources)
-         cmd = "ctags -a"
+         cmd = "%s -a " % self.ctags_cmd
          for source in sources:
             if os.path.isfile(source):
                cmd += " '%s'" % source
@@ -114,17 +115,20 @@ EEOOFF
 
 function! AutoTag()
 python << EEOOFF
-at = AutoTag(vim.eval("g:autotagExcludeSuffixes"), True)
+at = AutoTag(vim.eval("g:autotagExcludeSuffixes"), vim.eval("g:autotagCtagsCmd"), True)
 at.addSource(vim.eval("expand(\"%:p\")"))
 at.rebuildTagFiles()
 EEOOFF
 endfunction
 
+if !exists("g:autotagExcludeSuffixes")
+   let g:autotagExcludeSuffixes="tml.xml"
+endif
+if !exists("g:autotagCtagsCmd")
+   let g:autotagCtagsCmd="ctags"
+endif
 if !exists("g:autotag_autocmd_set")
    let g:autotag_autocmd_set = 1
-   if !exists("g:autotagExcludeSuffixes")
-      let g:autotagExcludeSuffixes="tml.xml"
-   endif
    autocmd BufWritePost,FileWritePost * call AutoTag ()
 endif
 
