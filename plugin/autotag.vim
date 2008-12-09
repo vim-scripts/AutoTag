@@ -8,18 +8,42 @@ if has("python")
 
 python << EEOOFF
 import os
+import subprocess
 import string
 import os.path
 import fileinput
 import sys
 import vim
+import time
+from traceback import format_exc
 
 def echo(str):
    str=str.replace('\\', '\\\\')
    str=str.replace('"', "'")
    vim.command("redraw | echo \"%s\"" % str)
 
+def diag(verbose, level, msg, args = None):
+   if msg and args:
+      msg = msg % args
+   if level <= verbose:
+      echo(msg)
+   if level < 0:
+      time.sleep(1)
+
+def goodTag(line, excluded):
+   if line[0] == '!':
+      return True
+   else:
+      f = string.split(line, '\t')
+      if len(f) > 3 and not f[1] in excluded:
+         return True
+   return False
+
 class AutoTag:
+   __fiveMB = 1024 * 1024 * 5
+   __level = 1
+   __verbose = 1
+
    def __init__(self, excludesuffix="", ctags_cmd="ctags", verbose=0):
       self.tags = {}
       self.excludesuffix = [ "." + s for s in excludesuffix.split(".") ]
@@ -29,7 +53,6 @@ class AutoTag:
       else:
          self.verbose = 0
       self.sep_used_by_ctags = '/'
-      self.cwd = os.getcwd()
       self.ctags_cmd = ctags_cmd
       self.count = 0
 
@@ -38,104 +61,87 @@ class AutoTag:
       while file:
          file = os.path.dirname(file)
          tagsFile = os.path.join(drive, file, "tags")
-         self.diag(2, "does %s exist?", tagsFile)
          if os.path.isfile(tagsFile):
-            self.diag(2, "Found tags file %s", tagsFile)
+            st = os.stat(tagsFile)
+            if st:
+               size = getattr(st, 'st_size', None)
+               if size is not None and size > AutoTag.__fiveMB:
+                  self.__diag(AutoTag.__level, "Ignoring excluded file " + source)
+                  return None
             return tagsFile
          elif not file or file == os.sep or file == "//" or file == "\\\\":
-            self.diag(2, "exhausted search for tag file for %s", source)
             return None
-         self.diag(2, "Nope. :-| %s does NOT exist", tagsFile)
       return None
 
    def addSource(self, source):
       if not source:
          return
+      if os.path.basename(source) == "tags":
+         self.__diag(AutoTag.__level, "Ignoring tags file")
+         return
       if os.path.splitext(source)[1] in self.excludesuffix:
-         self.diag(1, "Ignoring excluded file " + source)
+         self.__diag(AutoTag.__level, "Ignoring excluded file " + source)
          return
       tagsFile = self.findTagFile(source)
       if tagsFile:
-         self.diag(2, "if tagsFile:")
          relativeSource = source[len(os.path.dirname(tagsFile)):]
-         self.diag(2, "relativeSource = source[len(os.path.dirname(tagsFile)):]")
          if relativeSource[0] == os.sep:
-            self.diag(2, "if relativeSource[0] == os.sep:")
             relativeSource = relativeSource[1:]
-            self.diag(2, "relativeSource = relativeSource[1:]")
          if os.sep != self.sep_used_by_ctags:
-            self.diag(2, "if os.sep != self.sep_used_by_ctags:")
             relativeSource = string.replace(relativeSource, os.sep, self.sep_used_by_ctags)
-            self.diag(2, "relativeSource = string.replace(relativeSource, os.sep, self.sep_used_by_ctags)")
          if self.tags.has_key(tagsFile):
-            self.diag(2, "if self.tags.has_key(tagsFile):")
             self.tags[tagsFile].append(relativeSource)
-            self.diag(2, "self.tags[tagsFile].append(relativeSource)")
          else:
-            self.diag(2, "else:")
             self.tags[tagsFile] = [ relativeSource ]
-            self.diag(2, "self.tags[tagsFile] = [ relativeSource ]")
 
    def stripTags(self, tagsFile, sources):
-      self.diag(1, "Removing tags for %s from tags file %s", (sources, tagsFile))
+      self.__diag(AutoTag.__level, "Stripping tags for %s from tags file %s", (",".join(sources), tagsFile))
       backup = ".SAFE"
-      for line in fileinput.input(files=tagsFile, inplace=True, backup=backup):
-         if line[-1:] == '\n':
-            line = line[:-1]
-         if line[-1:] == '\r':
-            line = line[:-1]
-         if line[0] == "!":
-            print line
-         else:
-            fields = string.split(line, "\t")
-            if len(fields) > 3:
-               found = False
-               for source in sources:
-                  if fields[1] == source:
-                     found = True
-                     break
-               if not found:
-                  print line
-            else:
-               print line
+      for l in fileinput.input(files=tagsFile, inplace=True, backup=backup):
+         l = l.strip()
+         if goodTag(l, sources):
+            print l
       os.unlink(tagsFile + backup)
 
-   def rebuildTagFiles(self):
-      for tagsFile in self.tags.keys():
-         tagsDir = os.path.dirname(tagsFile)
-         sources = self.tags[tagsFile]
-         os.chdir(tagsDir)
-         self.stripTags(tagsFile, sources)
-         cmd = "%s -a " % self.ctags_cmd
-         for source in sources:
-            if os.path.isfile(source):
-               cmd += " '%s'" % source
-         self.diag(1, "%s: %s", (tagsDir, cmd))
-         (ch_in, ch_out) = os.popen2(cmd)
-         for line in ch_out:
-            pass
-      os.chdir(self.cwd)
+   def updateTagsFile(self, tagsFile, sources):
+      cwd = os.getcwd()
+      tagsDir = os.path.dirname(tagsFile)
+      self.stripTags(tagsFile, sources)
+      cmd = "%s -a " % self.ctags_cmd
+      for source in sources:
+         if os.path.isfile(os.path.join(tagsDir, source)):
+            cmd += " '%s'" % source
+      self.__diag(AutoTag.__level, "%s: %s", (tagsDir, cmd))
+      p = subprocess.Popen(cmd, shell=True, stdout=None, stderr=None, cwd=tagsDir)
 
-   def diag(self, level, msg, args = None):
-      if msg and args:
-         msg = msg % args
-      if level <= self.verbose:
-         echo(msg)
+   def rebuildTagFiles(self):
+      for (tagsFile, sources) in self.tags.items():
+         self.updateTagsFile(tagsFile, sources)
+
+   def __diag(self, level, msg, args = None):
+      diag(AutoTag.__verbose, level, msg, args)
 EEOOFF
 
 function! AutoTag()
 python << EEOOFF
-at = AutoTag(vim.eval("g:autotagExcludeSuffixes"), vim.eval("g:autotagCtagsCmd"), long(vim.eval("g:autotagVerbosityLevel")))
-at.addSource(vim.eval("expand(\"%:p\")"))
-at.rebuildTagFiles()
+try:
+    if long(vim.eval("g:autotagDisabled")) == 0:
+        at = AutoTag(vim.eval("g:autotagExcludeSuffixes"), vim.eval("g:autotagCtagsCmd"), long(vim.eval("g:autotagVerbosityLevel")))
+        at.addSource(vim.eval("expand(\"%:p\")"))
+        at.rebuildTagFiles()
+except:
+    diag(1, -1, format_exc())
 EEOOFF
 endfunction
 
+if !exists("g:autotagDisabled")
+   let g:autotagDisabled=0
+endif
 if !exists("g:autotagVerbosityLevel")
    let g:autotagVerbosityLevel=0
 endif
 if !exists("g:autotagExcludeSuffixes")
-   let g:autotagExcludeSuffixes="tml.xml"
+   let g:autotagExcludeSuffixes="tml.xml.text.txt"
 endif
 if !exists("g:autotagCtagsCmd")
    let g:autotagCtagsCmd="ctags"
