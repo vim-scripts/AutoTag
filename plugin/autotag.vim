@@ -8,7 +8,6 @@ if has("python")
 
 python << EEOOFF
 import os
-import subprocess
 import string
 import os.path
 import fileinput
@@ -16,6 +15,21 @@ import sys
 import vim
 import time
 from traceback import format_exc
+
+# Just in case the ViM build you're using doesn't have subprocess
+if sys.version < '2.4':
+   def do_cmd(cmd, cwd):
+      old_cwd=os.getcwd()
+      os.chdir(cwd)
+      (ch_in, ch_out) = os.popen2(cmd)
+      for line in ch_out:
+         pass
+      os.chdir(old_cwd)
+
+else:
+   import subprocess
+   def do_cmd(cmd, cwd):
+      p = subprocess.Popen(cmd, shell=True, stdout=None, stderr=None, cwd=cwd)
 
 def echo(str):
    str=str.replace('\\', '\\\\')
@@ -104,7 +118,6 @@ class AutoTag:
       os.unlink(tagsFile + backup)
 
    def updateTagsFile(self, tagsFile, sources):
-      cwd = os.getcwd()
       tagsDir = os.path.dirname(tagsFile)
       self.stripTags(tagsFile, sources)
       cmd = "%s -a " % self.ctags_cmd
@@ -112,7 +125,7 @@ class AutoTag:
          if os.path.isfile(os.path.join(tagsDir, source)):
             cmd += " '%s'" % source
       self.__diag(AutoTag.__level, "%s: %s", (tagsDir, cmd))
-      p = subprocess.Popen(cmd, shell=True, stdout=None, stderr=None, cwd=tagsDir)
+      do_cmd(cmd, tagsDir)
 
    def rebuildTagFiles(self):
       for (tagsFile, sources) in self.tags.items():
