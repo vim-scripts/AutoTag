@@ -41,13 +41,11 @@ def echo(str):
    str=str.replace('"', "'")
    vim.command("redraw | echo \"%s\"" % str)
 
-def diag(verbose, level, msg, args = None):
+def diag(verbosity, threshold, msg, args = None):
    if msg and args:
       msg = msg % args
-   if level <= verbose:
+   if verbosity >= threshold:
       echo(msg)
-   if level < 0:
-      time.sleep(1)
 
 def goodTag(line, excluded):
    if line[0] == '!':
@@ -59,47 +57,56 @@ def goodTag(line, excluded):
    return False
 
 class AutoTag:
-   __fiveMB = 1024 * 1024 * 5
-   __level = 1
-   __verbose = 1
+   __maxTagsFileSize = 1024 * 1024 * 7
+   __threshold = 1
 
-   def __init__(self, excludesuffix="", ctags_cmd="ctags", verbose=0):
+   def __init__(self, excludesuffix="", ctags_cmd="ctags", verbosity=0, tags_file=None):
       self.tags = {}
       self.excludesuffix = [ "." + s for s in excludesuffix.split(".") ]
-      verbose = long(verbose)
-      if verbose > 0:
-         self.verbose = verbose
+      verbosity = long(verbosity)
+      if verbosity > 0:
+         self.verbosity = verbosity
       else:
-         self.verbose = 0
+         self.verbosity = 0
       self.sep_used_by_ctags = '/'
       self.ctags_cmd = ctags_cmd
+      self.tags_file = tags_file
       self.count = 0
 
    def findTagFile(self, source):
+      self.__diag('source = "%s"' % (source, ))
       ( drive, file ) = os.path.splitdrive(source)
       while file:
          file = os.path.dirname(file)
-         tagsFile = os.path.join(drive, file, "tags")
+         #self.__diag('drive = "%s", file = "%s"' % (drive, file))
+         tagsFile = os.path.join(drive, file, self.tags_file)
+         #self.__diag('tagsFile "%s"' % tagsFile)
          if os.path.isfile(tagsFile):
             st = os.stat(tagsFile)
             if st:
                size = getattr(st, 'st_size', None)
-               if size is not None and size > AutoTag.__fiveMB:
-                  self.__diag(AutoTag.__level, "Ignoring excluded file " + source)
+               if not size:
+                  self.__diag("Could not stat tags file %s" % tagsFile)
+                  return None
+               if AutoTag.__maxTagsFileSize and size > AutoTag.__maxTagsFileSize:
+                  self.__diag("Ignoring too big tags file %s" % tagsFile)
                   return None
             return tagsFile
          elif not file or file == os.sep or file == "//" or file == "\\\\":
+            #self.__diag('bail (file = "%s")' % (file, ))
             return None
       return None
 
    def addSource(self, source):
       if not source:
+         self.__diag('No source')
          return
-      if os.path.basename(source) == "tags":
-         self.__diag(AutoTag.__level, "Ignoring tags file")
+      if os.path.basename(source) == self.tags_file:
+         self.__diag("Ignoring tags file %s" % (self.tags_file,))
          return
-      if os.path.splitext(source)[1] in self.excludesuffix:
-         self.__diag(AutoTag.__level, "Ignoring excluded file " + source)
+      (base, suff) = os.path.splitext(source)
+      if suff in self.excludesuffix:
+         self.__diag("Ignoring excluded file %s (suffix: %s)" % (source, suff))
          return
       tagsFile = self.findTagFile(source)
       if tagsFile:
@@ -114,7 +121,7 @@ class AutoTag:
             self.tags[tagsFile] = [ relativeSource ]
 
    def stripTags(self, tagsFile, sources):
-      self.__diag(AutoTag.__level, "Stripping tags for %s from tags file %s", (",".join(sources), tagsFile))
+      self.__diag("Stripping tags for %s from tags file %s", (",".join(sources), tagsFile))
       backup = ".SAFE"
       for l in fileinput.input(files=tagsFile, inplace=True, backup=backup):
          l = l.strip()
@@ -125,26 +132,29 @@ class AutoTag:
    def updateTagsFile(self, tagsFile, sources):
       tagsDir = os.path.dirname(tagsFile)
       self.stripTags(tagsFile, sources)
-      cmd = "%s -a " % self.ctags_cmd
+      if self.tags_file:
+         cmd = "%s -f %s -a " % (self.ctags_cmd, self.tags_file)
+      else:
+         cmd = "%s -a " % (self.ctags_cmd,)
       for source in sources:
          if os.path.isfile(os.path.join(tagsDir, source)):
             cmd += " '%s'" % source
-      self.__diag(AutoTag.__level, "%s: %s", (tagsDir, cmd))
+      self.__diag("%s: %s", (tagsDir, cmd))
       do_cmd(cmd, tagsDir)
 
    def rebuildTagFiles(self):
       for (tagsFile, sources) in self.tags.items():
          self.updateTagsFile(tagsFile, sources)
 
-   def __diag(self, level, msg, args = None):
-      diag(AutoTag.__verbose, level, msg, args)
+   def __diag(self, msg, args = None):
+      diag(self.verbosity, AutoTag.__threshold, msg, args)
 EEOOFF
 
 function! AutoTag()
 python << EEOOFF
 try:
     if long(vim.eval("g:autotagDisabled")) == 0:
-        at = AutoTag(vim.eval("g:autotagExcludeSuffixes"), vim.eval("g:autotagCtagsCmd"), long(vim.eval("g:autotagVerbosityLevel")))
+        at = AutoTag(vim.eval("g:autotagExcludeSuffixes"), vim.eval("g:autotagCtagsCmd"), long(vim.eval("g:autotagVerbosityLevel")), str(vim.eval("g:autotagTagsFile")))
         at.addSource(vim.eval("expand(\"%:p\")"))
         at.rebuildTagFiles()
 except:
@@ -164,10 +174,13 @@ endif
 if !exists("g:autotagCtagsCmd")
    let g:autotagCtagsCmd="ctags"
 endif
-if !exists("g:autotag_autocmd_set")
-   let g:autotag_autocmd_set=1
-   autocmd BufWritePost,FileWritePost * call AutoTag ()
+if !exists("g:autotagTagsFile")
+   let g:autotagTagsFile="tags"
 endif
+augroup autotag
+   au!
+   autocmd BufWritePost,FileWritePost * call AutoTag ()
+augroup END
 
 endif " has("python")
 
