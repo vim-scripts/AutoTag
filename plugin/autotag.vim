@@ -160,6 +160,9 @@ try:
 except:
     diag(1, -1, format_exc())
 EEOOFF
+    if exists(":TlistUpdate")
+        TlistUpdate
+    endif
 endfunction
 
 if !exists("g:autotagDisabled")
