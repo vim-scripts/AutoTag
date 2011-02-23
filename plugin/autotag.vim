@@ -71,17 +71,14 @@ class AutoTag:
    __maxTagsFileSize = 1024 * 1024 * 7
    __threshold = 1
 
-   def __init__(self, excludesuffix="", ctags_cmd="ctags", verbosity=0, tags_file=None):
+   def __init__(self):
       self.tags = {}
-      self.excludesuffix = [ "." + s for s in excludesuffix.split(".") ]
-      verbosity = long(verbosity)
-      if verbosity > 0:
-         self.verbosity = verbosity
-      else:
-         self.verbosity = 0
+      self.excludesuffix = [ "." + s for s in vim.eval("g:autotagExcludeSuffixes").split(".") ]
+      verbosity = long(vim.eval("g:autotagVerbosityLevel"))
+      self.verbosity = verbosity if verbosity > 0 else 0
       self.sep_used_by_ctags = '/'
-      self.ctags_cmd = ctags_cmd
-      self.tags_file = tags_file
+      self.ctags_cmd = vim.eval("g:autotagCtagsCmd")
+      self.tags_file = str(vim.eval("g:autotagTagsFile"))
       self.count = 0
 
    def findTagFile(self, source):
@@ -134,11 +131,18 @@ class AutoTag:
    def stripTags(self, tagsFile, sources):
       self.__diag("Stripping tags for %s from tags file %s", (",".join(sources), tagsFile))
       backup = ".SAFE"
-      for l in fileinput.input(files=tagsFile, inplace=True, backup=backup):
-         l = l.strip()
-         if goodTag(l, sources):
-            print l
-      os.unlink(tagsFile + backup)
+      input = fileinput.FileInput(files=tagsFile, inplace=True, backup=backup)
+      try:
+         for l in input:
+            l = l.strip()
+            if goodTag(l, sources):
+               print l
+      finally:
+         input.close()
+         try:
+            os.unlink(tagsFile + backup)
+         except StandardError:
+            pass
 
    def updateTagsFile(self, tagsFile, sources):
       tagsDir = os.path.dirname(tagsFile)
@@ -165,7 +169,7 @@ function! AutoTag()
 python << EEOOFF
 try:
     if long(vim.eval("g:autotagDisabled")) == 0:
-        at = AutoTag(vim.eval("g:autotagExcludeSuffixes"), vim.eval("g:autotagCtagsCmd"), long(vim.eval("g:autotagVerbosityLevel")), str(vim.eval("g:autotagTagsFile")))
+        at = AutoTag()
         at.addSource(vim.eval("expand(\"%:p\")"))
         at.rebuildTagFiles()
 except:
