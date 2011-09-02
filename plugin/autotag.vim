@@ -68,7 +68,9 @@ def goodTag(line, excluded):
    return False
 
 class AutoTag:
-   __maxTagsFileSize = 1024 * 1024 * 7
+   __maxTagsFileSize = long(vim.eval("g:autotagMaxTagFileSize"))
+   __maxTagsFileSize = __maxTagsFileSize if __maxTagsFileSize > 0 else 7
+   __maxTagsFileSize = __maxTagsFileSize * 1024 * 1024
    __threshold = 1
 
    def __init__(self):
