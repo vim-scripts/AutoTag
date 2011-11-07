@@ -43,7 +43,8 @@ if sys.version < '2.4':
 else:
    import subprocess
    def do_cmd(cmd, cwd):
-      p = subprocess.Popen(cmd, shell=True, stdout=None, stderr=None, cwd=cwd)
+      ignore=open('/dev/null', 'w')
+      p = subprocess.Popen(cmd, shell=True, stdout=ignore, stderr=ignore, cwd=cwd)
 
    from traceback import format_exc
 
