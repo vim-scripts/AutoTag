@@ -16,7 +16,6 @@ let g:autotag_vim_version_sourced=s:autotag_vim_version
 " just saved, removes all entries for that source file and *then* runs ctags -a
 
 if has("python")
-
 python << EEOOFF
 import os
 import string
@@ -25,6 +24,24 @@ import fileinput
 import sys
 import vim
 import time
+import logging
+
+# global vim config variables used (all are g:autotag<name>):
+# name purpose
+# maxTagsFileSize a cap on what size tag file to strip etc
+# ExcludeSuffixes suffixes to not ctags on
+# VerbosityLevel logger verbosity (as in Python logger module)
+# CtagsCmd name of ctags command
+# TagsFile name of tags file to look for
+# Disabled Disable autotag (enable by setting to any non-blank value)
+# StopAt stop looking for a tags file (and make one) at this directory (defaults to $HOME)
+vim_global_defaults = dict(maxTagsFileSize = 1024*1024*7,
+                           ExcludeSuffixes = "tml.xml.text.txt",
+                           VerbosityLevel = logging.WARNING,
+                           CtagsCmd = "ctags",
+                           TagsFile = "tags",
+                           Disabled = 0,
+                           StopAt = 0)
 
 # Just in case the ViM build you're using doesn't have subprocess
 if sys.version < '2.4':
@@ -47,74 +64,105 @@ else:
 
    from traceback import format_exc
 
-def echo(str):
-   str=str.replace('\\', '\\\\')
-   str=str.replace('"', "'")
-   vim.command("redraw | echo \"%s\"" % str)
-
-def diag(verbosity, threshold, msg, args = None):
-   if msg and args:
-      msg = msg % args
-   if verbosity >= threshold:
-      echo(msg)
-
-def goodTag(line, excluded):
+def goodTag(line, excluded, verbosity = logging.DEBUG):
    if line[0] == '!':
       return True
    else:
       f = string.split(line, '\t')
-      if len(f) > 3 and not f[1] in excluded:
+      logger.log(verbosity, "read tags line:%s", str(f))
+      if len(f) > 3 and f[1] not in excluded:
          return True
    return False
 
-class AutoTag:
-   __maxTagsFileSize = 1024 * 1024 * 7
-   __threshold = 1
+def vim_global(name, default = None):
+   not_found = default or vim_global_defaults.get(name, None)
+   try:
+      v = "g:autotag%s" % name
+      exists = (vim.eval("exists('%s')" % v) == "1")
+      if exists:
+         return vim.eval(v)
+      else:
+         if isinstance(not_found, int):
+            vim.command("let %s=%s" % (v, not_found))
+         else:
+            vim.command("let %s=\"%s\"" % (v, not_found))
+         return not_found
+   except:
+      return not_found
 
-   def __init__(self):
+class VimAppendHandler(logging.Handler):
+   def __init__(self, name, level):
+      logging.Handler.__init__(self, level)
+      self.__name = name
+      self.__formatter = logging.Formatter()
+
+   def __findBuffer(self):
+        for b in vim.buffers:
+            if b and b.name and b.name.endswith(self.__name):
+                return b
+
+   def emit(self, record):
+      b = self.__findBuffer()
+      if b:
+         b.append(self.__formatter.format(record))
+
+class AutoTag:
+   __maxTagsFileSize = long(vim_global("maxTagsFileSize"))
+
+   def __init__(self, logger):
       self.tags = {}
-      self.excludesuffix = [ "." + s for s in vim.eval("g:autotagExcludeSuffixes").split(".") ]
-      verbosity = long(vim.eval("g:autotagVerbosityLevel"))
-      self.verbosity = verbosity if verbosity > 0 else 0
+      self.excludesuffix = [ "." + s for s in vim_global("ExcludeSuffixes").split(".") ]
+      self.verbosity = int(vim_global("VerbosityLevel"))
       self.sep_used_by_ctags = '/'
-      self.ctags_cmd = vim.eval("g:autotagCtagsCmd")
-      self.tags_file = str(vim.eval("g:autotagTagsFile"))
+      self.ctags_cmd = vim_global("CtagsCmd")
+      self.tags_file = str(vim_global("TagsFile"))
       self.count = 0
+      self.logger = logger
+      self.home_dir = os.environ.get("HOME", None)
+      self.stop_at = not bool(vim_global("StopAt")) or self.home_dir
+
+   def __log(self, *args, **kwargs):
+      return self.logger.log(self.verbosity, *args, **kwargs)
 
    def findTagFile(self, source):
-      self.__diag('source = "%s"' % (source, ))
+      self.__log('source = "%s"', source)
       ( drive, file ) = os.path.splitdrive(source)
       while file:
          file = os.path.dirname(file)
-         #self.__diag('drive = "%s", file = "%s"' % (drive, file))
-         tagsFile = os.path.join(drive, file, self.tags_file)
-         #self.__diag('tagsFile "%s"' % tagsFile)
+         #self.logger.info('drive = "%s", file = "%s"', drive, file)
+         tagsDir = os.path.join(drive, file)
+         tagsFile = os.path.join(tagsDir, self.tags_file)
+         #self.logger.info('tagsFile "%s"', tagsFile)
          if os.path.isfile(tagsFile):
             st = os.stat(tagsFile)
             if st:
                size = getattr(st, 'st_size', None)
                if size is None:
-                  self.__diag("Could not stat tags file %s" % tagsFile)
+                  self.__log("Could not stat tags file %s", tagsFile)
                   return None
-               if AutoTag.__maxTagsFileSize and size > AutoTag.__maxTagsFileSize:
-                  self.__diag("Ignoring too big tags file %s" % tagsFile)
+               if size > AutoTag.__maxTagsFileSize:
+                  self.__log("Ignoring too big tags file %s", tagsFile)
                   return None
             return tagsFile
+         elif tagsDir and tagsDir == self.stop_at:
+            #self.logger.info("Reached %s. Making one %s" % (self.stop_at, tagsFile))
+            open(tagsFile, 'wb').close()
+            return tagsFile
          elif not file or file == os.sep or file == "//" or file == "\\\\":
-            #self.__diag('bail (file = "%s")' % (file, ))
+            #self.logger.info('bail (file = "%s")' % (file, ))
             return None
       return None
 
    def addSource(self, source):
       if not source:
-         self.__diag('No source')
+         self.__log('No source')
          return
       if os.path.basename(source) == self.tags_file:
-         self.__diag("Ignoring tags file %s" % (self.tags_file,))
+         self.__log("Ignoring tags file %s", self.tags_file)
          return
       (base, suff) = os.path.splitext(source)
       if suff in self.excludesuffix:
-         self.__diag("Ignoring excluded suffix %s for file %s" % (source, suff))
+         self.__log("Ignoring excluded suffix %s for file %s", source, suff)
          return
       tagsFile = self.findTagFile(source)
       if tagsFile:
@@ -129,7 +177,7 @@ class AutoTag:
             self.tags[tagsFile] = [ relativeSource ]
 
    def stripTags(self, tagsFile, sources):
-      self.__diag("Stripping tags for %s from tags file %s", (",".join(sources), tagsFile))
+      self.__log("Stripping tags for %s from tags file %s", ",".join(sources), tagsFile)
       backup = ".SAFE"
       input = fileinput.FileInput(files=tagsFile, inplace=True, backup=backup)
       try:
@@ -154,47 +202,44 @@ class AutoTag:
       for source in sources:
          if os.path.isfile(os.path.join(tagsDir, source)):
             cmd += " '%s'" % source
-      self.__diag("%s: %s", (tagsDir, cmd))
+      self.__log("%s: %s", tagsDir, cmd)
       do_cmd(cmd, tagsDir)
 
    def rebuildTagFiles(self):
       for (tagsFile, sources) in self.tags.items():
          self.updateTagsFile(tagsFile, sources)
-
-   def __diag(self, msg, args = None):
-      diag(self.verbosity, AutoTag.__threshold, msg, args)
 EEOOFF
 
 function! AutoTag()
 python << EEOOFF
 try:
-    if long(vim.eval("g:autotagDisabled")) == 0:
-        at = AutoTag()
+    logger
+except:
+    logger = logging.getLogger('autotag')
+    logger.addHandler(VimAppendHandler("autotag_debug", logging.DEBUG))
+
+try:
+    if vim_global("Disabled"):
+        at = AutoTag(logger)
         at.addSource(vim.eval("expand(\"%:p\")"))
         at.rebuildTagFiles()
 except:
-    diag(1, -1, format_exc())
+    logging.warning(format_exc())
 EEOOFF
     if exists(":TlistUpdate")
         TlistUpdate
     endif
 endfunction
 
-if !exists("g:autotagDisabled")
-   let g:autotagDisabled=0
-endif
-if !exists("g:autotagVerbosityLevel")
-   let g:autotagVerbosityLevel=0
-endif
-if !exists("g:autotagExcludeSuffixes")
-   let g:autotagExcludeSuffixes="tml.xml.text.txt"
-endif
-if !exists("g:autotagCtagsCmd")
-   let g:autotagCtagsCmd="ctags"
-endif
-if !exists("g:autotagTagsFile")
-   let g:autotagTagsFile="tags"
-endif
+function! AutoTagDebug()
+   new
+   file autotag_debug
+   setlocal buftype=nowrite
+   setlocal bufhidden=delete
+   setlocal noswapfile
+   normal 
+endfunction
+
 augroup autotag
    au!
    autocmd BufWritePost,FileWritePost * call AutoTag ()

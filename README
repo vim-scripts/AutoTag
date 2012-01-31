@@ -11,3 +11,6 @@ This python function will do two things:
 2) Should it find a tags file, it will then delete all entries in said tags file referencing the source file you've just saved and then execute ctags -a on that source file using the relative path to the source file from the tags file.
 
 This way, every time you save a file, your tags file will be seamlessly updated.
+
+The master copy of this is in my github files:
+https://github.com/craigemery/dotFiles/blob/master/vim/plugin/autotag.vim
