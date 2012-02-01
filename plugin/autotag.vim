@@ -219,7 +219,7 @@ except:
     logger.addHandler(VimAppendHandler("autotag_debug", logging.DEBUG))
 
 try:
-    if vim_global("Disabled"):
+    if not vim_global("Disabled"):
         at = AutoTag(logger)
         at.addSource(vim.eval("expand(\"%:p\")"))
         at.rebuildTagFiles()
