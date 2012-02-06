@@ -30,7 +30,7 @@ import logging
 # name purpose
 # maxTagsFileSize a cap on what size tag file to strip etc
 # ExcludeSuffixes suffixes to not ctags on
-# VerbosityLevel logger verbosity (as in Python logger module)
+# VerbosityLevel logging verbosity (as in Python logging module)
 # CtagsCmd name of ctags command
 # TagsFile name of tags file to look for
 # Disabled Disable autotag (enable by setting to any non-blank value)
@@ -64,105 +64,112 @@ else:
 
    from traceback import format_exc
 
-def goodTag(line, excluded, verbosity = logging.DEBUG):
-   if line[0] == '!':
-      return True
-   else:
-      f = string.split(line, '\t')
-      logger.log(verbosity, "read tags line:%s", str(f))
-      if len(f) > 3 and f[1] not in excluded:
-         return True
-   return False
-
-def vim_global(name, default = None):
-   not_found = default or vim_global_defaults.get(name, None)
+def vim_global(name, kind = string):
+   ret = vim_global_defaults.get(name, None)
    try:
       v = "g:autotag%s" % name
       exists = (vim.eval("exists('%s')" % v) == "1")
       if exists:
-         return vim.eval(v)
+         ret = vim.eval(v)
       else:
-         if isinstance(not_found, int):
-            vim.command("let %s=%s" % (v, not_found))
+         if isinstance(ret, int):
+            vim.command("let %s=%s" % (v, ret))
          else:
-            vim.command("let %s=\"%s\"" % (v, not_found))
-         return not_found
-   except:
-      return not_found
+            vim.command("let %s=\"%s\"" % (v, ret))
+   finally:
+      if kind == bool:
+         ret = (ret not in [0, "0"])
+      elif kind == int:
+         ret = int(ret)
+      elif kind == string:
+         pass
+      return ret
 
 class VimAppendHandler(logging.Handler):
-   def __init__(self, name, level):
-      logging.Handler.__init__(self, level)
+   def __init__(self, name):
+      logging.Handler.__init__(self)
       self.__name = name
       self.__formatter = logging.Formatter()
 
    def __findBuffer(self):
-        for b in vim.buffers:
-            if b and b.name and b.name.endswith(self.__name):
-                return b
+      for b in vim.buffers:
+         if b and b.name and b.name.endswith(self.__name):
+            return b
 
    def emit(self, record):
       b = self.__findBuffer()
       if b:
          b.append(self.__formatter.format(record))
 
-class AutoTag:
-   __maxTagsFileSize = long(vim_global("maxTagsFileSize"))
+def makeAndAddHandler(logger, name):
+   ret = VimAppendHandler(name)
+   logger.addHandler(ret)
+   return ret
 
-   def __init__(self, logger):
+
+class AutoTag:
+   MAXTAGSFILESIZE = long(vim_global("maxTagsFileSize"))
+   DEBUG_NAME = "autotag_debug"
+   LOGGER = logging.getLogger(DEBUG_NAME)
+   HANDLER = makeAndAddHandler(LOGGER, DEBUG_NAME)
+
+   @staticmethod
+   def setVerbosity():
+      try:
+         level = int(vim_global("VerbosityLevel"))
+      except:
+         level = vim_global_defaults["VerbosityLevel"]
+      AutoTag.LOGGER.setLevel(level)
+
+   def __init__(self):
       self.tags = {}
       self.excludesuffix = [ "." + s for s in vim_global("ExcludeSuffixes").split(".") ]
-      self.verbosity = int(vim_global("VerbosityLevel"))
+      AutoTag.setVerbosity()
       self.sep_used_by_ctags = '/'
       self.ctags_cmd = vim_global("CtagsCmd")
       self.tags_file = str(vim_global("TagsFile"))
       self.count = 0
-      self.logger = logger
-      self.home_dir = os.environ.get("HOME", None)
-      self.stop_at = not bool(vim_global("StopAt")) or self.home_dir
-
-   def __log(self, *args, **kwargs):
-      return self.logger.log(self.verbosity, *args, **kwargs)
+      self.stop_at = vim_global("StopAt")
 
    def findTagFile(self, source):
-      self.__log('source = "%s"', source)
+      AutoTag.LOGGER.info('source = "%s"', source)
       ( drive, file ) = os.path.splitdrive(source)
       while file:
          file = os.path.dirname(file)
-         #self.logger.info('drive = "%s", file = "%s"', drive, file)
+         AutoTag.LOGGER.info('drive = "%s", file = "%s"', drive, file)
          tagsDir = os.path.join(drive, file)
          tagsFile = os.path.join(tagsDir, self.tags_file)
-         #self.logger.info('tagsFile "%s"', tagsFile)
+         AutoTag.LOGGER.info('tagsFile "%s"', tagsFile)
          if os.path.isfile(tagsFile):
             st = os.stat(tagsFile)
             if st:
                size = getattr(st, 'st_size', None)
                if size is None:
-                  self.__log("Could not stat tags file %s", tagsFile)
+                  AutoTag.LOGGER.warn("Could not stat tags file %s", tagsFile)
                   return None
-               if size > AutoTag.__maxTagsFileSize:
-                  self.__log("Ignoring too big tags file %s", tagsFile)
+               if size > AutoTag.MAXTAGSFILESIZE:
+                  AutoTag.LOGGER.info("Ignoring too big tags file %s", tagsFile)
                   return None
             return tagsFile
          elif tagsDir and tagsDir == self.stop_at:
-            #self.logger.info("Reached %s. Making one %s" % (self.stop_at, tagsFile))
+            AutoTag.LOGGER.info("Reached %s. Making one %s" % (self.stop_at, tagsFile))
             open(tagsFile, 'wb').close()
             return tagsFile
          elif not file or file == os.sep or file == "//" or file == "\\\\":
-            #self.logger.info('bail (file = "%s")' % (file, ))
+            AutoTag.LOGGER.info('bail (file = "%s")' % (file, ))
             return None
       return None
 
    def addSource(self, source):
       if not source:
-         self.__log('No source')
+         AutoTag.LOGGER.warn('No source')
          return
       if os.path.basename(source) == self.tags_file:
-         self.__log("Ignoring tags file %s", self.tags_file)
+         AutoTag.LOGGER.info("Ignoring tags file %s", self.tags_file)
          return
       (base, suff) = os.path.splitext(source)
       if suff in self.excludesuffix:
-         self.__log("Ignoring excluded suffix %s for file %s", source, suff)
+         AutoTag.LOGGER.info("Ignoring excluded suffix %s for file %s", source, suff)
          return
       tagsFile = self.findTagFile(source)
       if tagsFile:
@@ -176,14 +183,24 @@ class AutoTag:
          else:
             self.tags[tagsFile] = [ relativeSource ]
 
+   def goodTag(self, line, excluded):
+      if line[0] == '!':
+         return True
+      else:
+         f = string.split(line, '\t')
+         AutoTag.LOGGER.log(1, "read tags line:%s", str(f))
+         if len(f) > 3 and f[1] not in excluded:
+            return True
+      return False
+
    def stripTags(self, tagsFile, sources):
-      self.__log("Stripping tags for %s from tags file %s", ",".join(sources), tagsFile)
+      AutoTag.LOGGER.info("Stripping tags for %s from tags file %s", ",".join(sources), tagsFile)
       backup = ".SAFE"
       input = fileinput.FileInput(files=tagsFile, inplace=True, backup=backup)
       try:
          for l in input:
             l = l.strip()
-            if goodTag(l, sources):
+            if self.goodTag(l, sources):
                print l
       finally:
          input.close()
@@ -202,7 +219,7 @@ class AutoTag:
       for source in sources:
          if os.path.isfile(os.path.join(tagsDir, source)):
             cmd += " '%s'" % source
-      self.__log("%s: %s", tagsDir, cmd)
+      AutoTag.LOGGER.log(1, "%s: %s", tagsDir, cmd)
       do_cmd(cmd, tagsDir)
 
    def rebuildTagFiles(self):
@@ -213,22 +230,16 @@ EEOOFF
 function! AutoTag()
 python << EEOOFF
 try:
-    logger
+   if not vim_global("Disabled", bool):
+      at = AutoTag()
+      at.addSource(vim.eval("expand(\"%:p\")"))
+      at.rebuildTagFiles()
 except:
-    logger = logging.getLogger('autotag')
-    logger.addHandler(VimAppendHandler("autotag_debug", logging.DEBUG))
-
-try:
-    if not vim_global("Disabled"):
-        at = AutoTag(logger)
-        at.addSource(vim.eval("expand(\"%:p\")"))
-        at.rebuildTagFiles()
-except:
-    logging.warning(format_exc())
+   logging.warning(format_exc())
 EEOOFF
-    if exists(":TlistUpdate")
-        TlistUpdate
-    endif
+   if exists(":TlistUpdate")
+      TlistUpdate
+   endif
 endfunction
 
 function! AutoTagDebug()
