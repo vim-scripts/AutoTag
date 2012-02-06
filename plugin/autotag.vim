@@ -99,11 +99,11 @@ class AutoTag:
                if AutoTag.__maxTagsFileSize and size > AutoTag.__maxTagsFileSize:
                   self.__diag("Ignoring too big tags file %s" % tagsFile)
                   return None
-            return tagsFile
+            return file, tagsFile
          elif not file or file == os.sep or file == "//" or file == "\\\\":
             #self.__diag('bail (file = "%s")' % (file, ))
-            return None
-      return None
+            return None, None
+      return None, None
 
    def addSource(self, source):
       if not source:
@@ -116,17 +116,17 @@ class AutoTag:
       if suff in self.excludesuffix:
          self.__diag("Ignoring excluded suffix %s for file %s" % (source, suff))
          return
-      tagsFile = self.findTagFile(source)
+      tagsDir, tagsFile = self.findTagFile(source)
       if tagsFile:
-         relativeSource = source[len(os.path.dirname(tagsFile)):]
+         relativeSource = source[len(tagsDir):]
          if relativeSource[0] == os.sep:
             relativeSource = relativeSource[1:]
          if os.sep != self.sep_used_by_ctags:
             relativeSource = string.replace(relativeSource, os.sep, self.sep_used_by_ctags)
-         if self.tags.has_key(tagsFile):
-            self.tags[tagsFile].append(relativeSource)
+         if self.tags.has_key((tagsFile, tagsDir)):
+            self.tags[(tagsFile, tagsDir)].append(relativeSource)
          else:
-            self.tags[tagsFile] = [ relativeSource ]
+            self.tags[(tagsFile, tagsDir)] = [ relativeSource ]
 
    def stripTags(self, tagsFile, sources):
       self.__diag("Stripping tags for %s from tags file %s", (",".join(sources), tagsFile))
@@ -144,8 +144,7 @@ class AutoTag:
          except StandardError:
             pass
 
-   def updateTagsFile(self, tagsFile, sources):
-      tagsDir = os.path.dirname(tagsFile)
+   def updateTagsFile(self, tagsDir, tagsFile, sources):
       self.stripTags(tagsFile, sources)
       if self.tags_file:
          cmd = "%s -f %s -a " % (self.ctags_cmd, self.tags_file)
@@ -158,8 +157,8 @@ class AutoTag:
       do_cmd(cmd, tagsDir)
 
    def rebuildTagFiles(self):
-      for (tagsFile, sources) in self.tags.items():
-         self.updateTagsFile(tagsFile, sources)
+      for ((tagsFile, tagsDir), sources) in self.tags.items():
+         self.updateTagsFile(tagsDir, tagsFile, sources)
 
    def __diag(self, msg, args = None):
       diag(self.verbosity, AutoTag.__threshold, msg, args)
