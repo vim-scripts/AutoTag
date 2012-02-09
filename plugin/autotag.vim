@@ -25,6 +25,7 @@ import sys
 import vim
 import time
 import logging
+from collections import defaultdict
 
 # global vim config variables used (all are g:autotag<name>):
 # name purpose
@@ -122,7 +123,7 @@ class AutoTag:
       AutoTag.LOGGER.setLevel(level)
 
    def __init__(self):
-      self.tags = {}
+      self.tags = defaultdict(list)
       self.excludesuffix = [ "." + s for s in vim_global("ExcludeSuffixes").split(".") ]
       AutoTag.setVerbosity()
       self.sep_used_by_ctags = '/'
@@ -134,6 +135,7 @@ class AutoTag:
    def findTagFile(self, source):
       AutoTag.LOGGER.info('source = "%s"', source)
       ( drive, file ) = os.path.splitdrive(source)
+      ret = None
       while file:
          file = os.path.dirname(file)
          AutoTag.LOGGER.info('drive = "%s", file = "%s"', drive, file)
@@ -146,19 +148,21 @@ class AutoTag:
                size = getattr(st, 'st_size', None)
                if size is None:
                   AutoTag.LOGGER.warn("Could not stat tags file %s", tagsFile)
-                  return None
+                  break
                if size > AutoTag.MAXTAGSFILESIZE:
                   AutoTag.LOGGER.info("Ignoring too big tags file %s", tagsFile)
-                  return None
-            return tagsFile
+                  break
+            ret = (file, tagsFile)
+            break
          elif tagsDir and tagsDir == self.stop_at:
             AutoTag.LOGGER.info("Reached %s. Making one %s" % (self.stop_at, tagsFile))
             open(tagsFile, 'wb').close()
-            return tagsFile
+            ret = (file, tagsFile)
+            break
          elif not file or file == os.sep or file == "//" or file == "\\\\":
             AutoTag.LOGGER.info('bail (file = "%s")' % (file, ))
-            return None
-      return None
+            break
+      return ret
 
    def addSource(self, source):
       if not source:
@@ -171,17 +175,15 @@ class AutoTag:
       if suff in self.excludesuffix:
          AutoTag.LOGGER.info("Ignoring excluded suffix %s for file %s", source, suff)
          return
-      tagsFile = self.findTagFile(source)
-      if tagsFile:
-         relativeSource = source[len(os.path.dirname(tagsFile)):]
+      found = self.findTagFile(source)
+      if found:
+         tagsDir, tagsFile = found
+         relativeSource = source[len(tagsDir):]
          if relativeSource[0] == os.sep:
             relativeSource = relativeSource[1:]
          if os.sep != self.sep_used_by_ctags:
             relativeSource = string.replace(relativeSource, os.sep, self.sep_used_by_ctags)
-         if self.tags.has_key(tagsFile):
-            self.tags[tagsFile].append(relativeSource)
-         else:
-            self.tags[tagsFile] = [ relativeSource ]
+         self.tags[(tagsDir, tagsFile)].append(relativeSource)
 
    def goodTag(self, line, excluded):
       if line[0] == '!':
@@ -209,8 +211,7 @@ class AutoTag:
          except StandardError:
             pass
 
-   def updateTagsFile(self, tagsFile, sources):
-      tagsDir = os.path.dirname(tagsFile)
+   def updateTagsFile(self, tagsDir, tagsFile, sources):
       self.stripTags(tagsFile, sources)
       if self.tags_file:
          cmd = "%s -f %s -a " % (self.ctags_cmd, self.tags_file)
@@ -223,8 +224,8 @@ class AutoTag:
       do_cmd(cmd, tagsDir)
 
    def rebuildTagFiles(self):
-      for (tagsFile, sources) in self.tags.items():
-         self.updateTagsFile(tagsFile, sources)
+      for ((tagsDir, tagsFile), sources) in self.tags.items():
+         self.updateTagsFile(tagsDir, tagsFile, sources)
 EEOOFF
 
 function! AutoTag()
